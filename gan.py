@@ -34,6 +34,7 @@ ds = tf.contrib.distributions
 framework = tf.contrib.framework
 
 leaky_relu = lambda net: tf.nn.leaky_relu(net, alpha=0.01)
+noise_dims = 64
 
 def generator_fn(noise, weight_decay=2.5e-5, is_training=True):
     """Simple generator to produce MNIST images.
@@ -150,7 +151,7 @@ def evaluate_tfgan_loss(gan_loss, name=None):
 
 MNIST_DATA_DIR = '/home/yonic/repos/mnist_gan/mnist-data'
 
-def train():
+def train(is_train):
     
     if not tf.gfile.Exists(MNIST_DATA_DIR):
         tf.gfile.MakeDirs(MNIST_DATA_DIR)
@@ -171,9 +172,8 @@ def train():
     #    real_images[:20,...], num_cols=10)
     #print('visualize_digits')
     #visualize_digits(check_real_digits)
-    #plt.show()
+    #plt.show()    
     
-    noise_dims = 64
     gan_model = tfgan.gan_model(
         generator_fn,
         discriminator_fn,
@@ -193,8 +193,11 @@ def train():
     for gan_loss, name in [(improved_wgan_loss, 'improved wgan loss')]:
         evaluate_tfgan_loss(gan_loss, name)
     
-    generator_optimizer = tf.train.AdamOptimizer(0.001, beta1=0.5)
-    discriminator_optimizer = tf.train.AdamOptimizer(0.0001, beta1=0.5)
+    
+    #generator_optimizer = tf.train.AdamOptimizer(0.001, beta1=0.5)
+    #discriminator_optimizer = tf.train.AdamOptimizer(0.0001, beta1=0.5)
+    generator_optimizer = tf.train.RMSPropOptimizer(0.001)
+    discriminator_optimizer = tf.train.RMSPropOptimizer(0.0001)
     gan_train_ops = tfgan.gan_train_ops(
         gan_model,
         improved_wgan_loss,
@@ -234,28 +237,53 @@ def train():
     
     global_step = tf.train.get_or_create_global_step()
     loss_values, mnist_scores, frechet_distances  = [], [], []
-    
-    with tf.train.SingularMonitoredSession() as sess:
+    tf.summary.scalar('dis_loss', gan_loss.discriminator_loss)
+    tf.summary.scalar('gen_loss', gan_loss.generator_loss)
+    merged = tf.summary.merge_all()
+    saver = tf.train.Saver()
+    saver_hook =  tf.train.CheckpointSaverHook(
+      checkpoint_dir= "./models",
+      save_steps=1000,
+      saver=saver)
+     
+    print("Graph trainable nodes:")
+    for v in tf.trainable_variables():
+        print (v.name)
+   
+    with tf.train.SingularMonitoredSession(hooks=[saver_hook],
+        checkpoint_dir="./models") as sess:
         start_time = time.time()
-        for i in xrange(1601):
-            cur_loss, _ = train_step_fn(
-                sess, gan_train_ops, global_step, train_step_kwargs={})
-            loss_values.append((i, cur_loss))
-            if i % 200 == 0:
-                mnist_score, f_distance, digits_np = sess.run(
-                    [eval_score, frechet_distance, generated_data_to_visualize])
-                mnist_scores.append((i, mnist_score))
-                frechet_distances.append((i, f_distance))
-                print('Current loss: %f' % cur_loss)
-                print('Current MNIST score: %f' % mnist_scores[-1][1])
-                print('Current Frechet distance: %f' % frechet_distances[-1][1])
-                visualize_training_generator(i, start_time, digits_np)
-    
-    
+        train_writer = tf.summary.FileWriter("./summary", sess.graph)
+        if is_train:
+            for i in xrange(2000):
+                cur_loss, _ = train_step_fn(
+                    sess, gan_train_ops, global_step, train_step_kwargs={})
+                loss_values.append((i, cur_loss))
+
+                if i % 10 == 0:
+                    merged_val = sess.run(merged)
+                    train_writer.add_summary(merged_val, i)
+                    print("Step:{}".format(i))
+
+            mnist_score, f_distance, digits_np = sess.run(
+                [eval_score, frechet_distance, generated_data_to_visualize])
+            mnist_scores.append((i, mnist_score))
+            frechet_distances.append((i, f_distance))
+            print('Current loss: %f' % cur_loss)
+            print('Current MNIST score: %f' % mnist_scores[-1][1])
+            print('Current Frechet distance: %f' % frechet_distances[-1][1])
+            visualize_training_generator(i, start_time, digits_np)
+            
+        else: #generate from trained model
+            generated = sess.run(eval_images)
+            print("generated[0] shape:{}".format(generated[0].shape))
+            plt.imshow(np.squeeze(generated[0]), cmap='gray')
+            plt.show()
+            
+        
     
     
 
 
 if __name__ == '__main__':
-    train()
-    
+    train(False)
